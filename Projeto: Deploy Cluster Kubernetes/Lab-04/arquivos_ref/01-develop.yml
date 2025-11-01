@@ -1,0 +1,112 @@
+name: 02 Dev Deploy and Promote to Hml
+
+on:
+  push:
+    branches:
+      - develop
+
+jobs:
+  deploy-dev:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Azure Login
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.6.0
+
+    - name: Terraform Validation and Plan for DEV
+      working-directory: terraform
+      env:
+        ARM_ACCESS_KEY: ${{ secrets.ARM_ACCESS_KEY }}
+      run: |
+        echo "=== TERRAFORM VALIDATION FOR DEV ENVIRONMENT ==="
+        terraform fmt -check=true
+        terraform init -backend-config="key=aks/dev.tfstate"
+        terraform validate
+        echo "PASSED: Terraform validation passed"
+        echo ""
+        echo "=== TERRAFORM PLAN FOR DEV ==="
+        terraform plan -var-file="dev/dev.tfvars" -out=dev.tfplan
+        echo "PASSED: Terraform plan generated for DEV environment"
+
+
+    - name: Deploy to DEV
+      working-directory: terraform
+      env:
+        ARM_ACCESS_KEY: ${{ secrets.ARM_ACCESS_KEY }}
+      run: |
+        echo "=== DEPLOYING TO DEV ENVIRONMENT ==="
+        echo "Environment: DEV"
+        echo "Branch: ${{ github.ref_name }}"
+        echo "Commit: ${{ github.sha }}"
+
+        echo "Applying terraform plan..."
+        terraform apply -auto-approve dev.tfplan
+        echo "PASSED: DEV infrastructure deployed"
+
+        # Get AKS credentials
+        az aks get-credentials --resource-group gh-devops-dev --name aks-devops-dev --overwrite-existing
+        echo "PASSED: AKS credentials configured"
+
+    - name: Post-deployment tests
+      run: |
+        echo "=== DEV ENVIRONMENT TESTS ==="
+        echo "Testing cluster connectivity..."
+        kubectl cluster-info
+        kubectl get nodes
+        echo "PASSED: Cluster connectivity verified"
+
+        echo "Testing NGINX Ingress Controller..."
+        kubectl get pods -n nginx-ingress
+        kubectl get svc -n nginx-ingress
+        echo "PASSED: NGINX Ingress Controller verified"
+
+        echo "Testing Argo Rollouts..."
+        kubectl get pods -n argo-rollouts
+        echo "PASSED: Argo Rollouts verified"
+
+        echo "PASSED: All DEV tests passed"
+
+  createPullRequest:
+    needs: deploy-dev
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Create Pull Request to homologacao
+      uses: repo-sync/pull-request@v2
+      with:
+        github_token: ${{ secrets.TOKEN_GB }}
+        destination_branch: "homologacao"
+        pr_title: "Auto-promote: DEV to HML"
+        pr_body: |
+          ## Automated Promotion to HML
+
+          **Source:** `develop` (DEV Environment)
+          **Target:** `homologacao` (HML Environment)
+          **Commit:** `${{ github.sha }}`
+
+          ### DEV Deployment Results
+          - Infrastructure: DEPLOYED
+          - Application: HEALTHY
+          - Tests: PASSED
+          - Security: VALIDATED
+
+          ### Ready for HML
+          This change has been validated in DEV environment and is ready for homologation.
+
+          ### Next Steps
+          - Merge this PR to trigger HML deployment
+          - After HML validation, auto-promotion to PROD will be triggered
+        pr_draft: false

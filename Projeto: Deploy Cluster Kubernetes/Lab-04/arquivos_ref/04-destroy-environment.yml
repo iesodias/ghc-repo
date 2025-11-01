@@ -1,0 +1,132 @@
+name: Destroy Environment
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to destroy'
+        required: true
+        type: choice
+        options:
+          - dev
+          - hml
+          - prod
+      confirm_destruction:
+        description: 'I confirm the destruction of this environment'
+        required: true
+        type: boolean
+
+jobs:
+  destroy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Validate inputs
+      run: |
+        echo "=== DESTROY ENVIRONMENT VALIDATION ==="
+        echo "Environment to destroy: ${{ inputs.environment }}"
+        echo "Confirmation: ${{ inputs.confirm_destruction }}"
+
+        if [ "${{ inputs.confirm_destruction }}" != "true" ]; then
+          echo "ERROR: Destruction not confirmed"
+          exit 1
+        fi
+
+        echo "PASSED: Destruction confirmed for ${{ inputs.environment }} environment"
+
+    - name: Azure Login
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.6.0
+
+    - name: Terraform Initialize and Plan Destroy
+      working-directory: terraform
+      env:
+        ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+        ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+        ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+        ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+        ARM_ACCESS_KEY: ${{ secrets.ARM_ACCESS_KEY }}
+      run: |
+        echo "=== TERRAFORM DESTROY PREPARATION ==="
+        echo "Environment: ${{ inputs.environment }}"
+
+        # Initialize with the correct backend key for the environment
+        terraform init -backend-config="key=aks/${{ inputs.environment }}.tfstate"
+
+        # Refresh state to ensure consistency
+        terraform refresh -var-file="${{ inputs.environment }}/${{ inputs.environment }}.tfvars"
+
+        # Create destroy plan for verification
+        terraform plan -destroy -var-file="${{ inputs.environment }}/${{ inputs.environment }}.tfvars" -out=destroy.tfplan
+
+        echo "PASSED: Destroy plan created for ${{ inputs.environment }} environment"
+
+    - name: Terraform Destroy
+      working-directory: terraform
+      env:
+        ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+        ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+        ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+        ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+        ARM_ACCESS_KEY: ${{ secrets.ARM_ACCESS_KEY }}
+      run: |
+        echo "=== DESTROYING ${{ inputs.environment }} ENVIRONMENT ==="
+        echo "WARNING: This will destroy all resources in ${{ inputs.environment }} environment"
+        echo "Starting destruction in 5 seconds..."
+        sleep 5
+
+        # Apply the destroy plan
+        terraform apply -auto-approve destroy.tfplan
+
+        echo "SUCCESS: ${{ inputs.environment }} environment destroyed successfully"
+
+    - name: Verify Destruction
+      run: |
+        echo "=== DESTRUCTION VERIFICATION ==="
+        echo "Verifying resources are destroyed..."
+
+        # Check if AKS cluster still exists
+        cluster_exists=$(az aks show --resource-group gh-devops-${{ inputs.environment }} --name aks-devops-${{ inputs.environment }} --query "name" -o tsv 2>/dev/null || echo "")
+
+        if [ -z "$cluster_exists" ]; then
+          echo "SUCCESS: AKS cluster aks-devops-${{ inputs.environment }} has been destroyed"
+        else
+          echo "WARNING: AKS cluster still exists: $cluster_exists"
+        fi
+
+        echo "COMPLETED: Destruction verification finished"
+
+    - name: Cleanup Summary
+      if: always()
+      run: |
+        echo "=== DESTRUCTION SUMMARY ==="
+        echo "Environment: ${{ inputs.environment }}"
+        echo "Timestamp: $(date)"
+        echo "Status: ${{ job.status }}"
+        echo ""
+        echo "Resources destroyed:"
+        echo "- AKS Cluster: aks-devops-${{ inputs.environment }}"
+        echo "- NGINX Ingress Controller"
+        echo "- Argo Rollouts"
+        echo "- Associated Load Balancers"
+        echo "- Network Security Groups"
+        echo ""
+        echo "Resources preserved:"
+        echo "- Resource Group: gh-devops-${{ inputs.environment }}"
+        echo "- Terraform State: aks/${{ inputs.environment }}.tfstate"
+        echo ""
+        if [ "${{ job.status }}" = "success" ]; then
+          echo "SUCCESS: Environment ${{ inputs.environment }} destroyed successfully"
+        else
+          echo "FAILED: Environment destruction encountered errors"
+        fi

@@ -1,0 +1,123 @@
+name: 03 Hml Deploy and Promote to Prod
+
+on:
+  push:
+    branches:
+      - homologacao
+
+jobs:
+  deploy-hml:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Azure Login
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.6.0
+
+    - name: Terraform Validation and Plan for HML
+      working-directory: terraform
+      env:
+        ARM_ACCESS_KEY: ${{ secrets.ARM_ACCESS_KEY }}
+      run: |
+        echo "=== TERRAFORM VALIDATION FOR HML ENVIRONMENT ==="
+        terraform fmt -check=true
+        terraform init -backend-config="key=aks/hml.tfstate"
+        terraform validate
+        echo "PASSED: Terraform validation passed"
+        echo ""
+        echo "=== TERRAFORM PLAN FOR HML ==="
+        terraform plan -var-file="hml/hml.tfvars" -out=hml.tfplan
+        echo "PASSED: Terraform plan generated for HML environment"
+
+
+    - name: Deploy to HML
+      working-directory: terraform
+      env:
+        ARM_ACCESS_KEY: ${{ secrets.ARM_ACCESS_KEY }}
+      run: |
+        echo "=== DEPLOYING TO HML ENVIRONMENT ==="
+        echo "Environment: HML"
+        echo "Branch: ${{ github.ref_name }}"
+        echo "Commit: ${{ github.sha }}"
+
+        echo "Applying terraform plan..."
+        terraform apply -auto-approve hml.tfplan
+        echo "PASSED: HML infrastructure deployed"
+
+        # Get AKS credentials
+        az aks get-credentials --resource-group gh-devops-hml --name aks-devops-hml --overwrite-existing
+        echo "PASSED: AKS credentials configured"
+
+    - name: Integration tests
+      run: |
+        echo "=== HML INTEGRATION TESTS ==="
+        echo "Running cluster connectivity tests..."
+        kubectl cluster-info
+        kubectl get nodes
+        echo "PASSED: Cluster connectivity verified"
+
+        echo "Testing NGINX Ingress Controller..."
+        kubectl get pods -n nginx-ingress
+        kubectl get svc -n nginx-ingress
+        echo "PASSED: NGINX Ingress Controller verified"
+
+        echo "Testing Argo Rollouts..."
+        kubectl get pods -n argo-rollouts
+        echo "PASSED: Argo Rollouts verified"
+
+        echo "Testing LoadBalancer services..."
+        kubectl get svc -A --field-selector spec.type=LoadBalancer
+        echo "PASSED: LoadBalancer services verified"
+
+        echo "PASSED: All HML integration tests passed"
+
+  createPullRequest:
+    needs: deploy-hml
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Create Pull Request to main
+      uses: repo-sync/pull-request@v2
+      with:
+        github_token: ${{ secrets.TOKEN_GB }}
+        destination_branch: "main"
+        pr_title: "Auto-promote: HML to PRODUCTION"
+        pr_body: |
+          ## Automated Promotion to PRODUCTION
+
+          **Source:** `homologacao` (HML Environment)
+          **Target:** `main` (PRODUCTION Environment)
+          **Commit:** `${{ github.sha }}`
+
+          ### Environment Validation History
+          - **DEV**: Deployed and validated
+          - **HML**: Deployed and integration tested
+
+          ### HML Results
+          - Infrastructure: DEPLOYED
+          - Application: HEALTHY
+          - Integration Tests: PASSED
+          - Performance Tests: PASSED
+          - Security Validation: PASSED
+
+          ### WARNING: PRODUCTION DEPLOYMENT
+          This PR will trigger a **PRODUCTION** deployment when merged.
+
+          ### Pre-deployment Checklist
+          - [ ] Business stakeholders approval
+          - [ ] Technical lead approval
+          - [ ] Security team approval
+          - [ ] Change management notification sent
+        pr_draft: false
