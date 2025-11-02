@@ -1,10 +1,9 @@
 name: 04 Prd Deploy and Auto-Merge PR
 
 on:
-  pull_request:
+  push:
     branches:
       - main
-    types: [opened, synchronize]
 
 jobs:
   terraform-validation:
@@ -40,7 +39,6 @@ jobs:
         echo "=== TERRAFORM PLAN FOR PRODUCTION ==="
         terraform plan -var-file="prod/prod.tfvars" -out=prod.tfplan
         echo "PASSED: Terraform plan generated for PRODUCTION environment"
-
 
   deploy-production:
     runs-on: ubuntu-latest
@@ -81,93 +79,34 @@ jobs:
         echo "Branch: ${{ github.head_ref }}"
         echo "Commit: ${{ github.sha }}"
 
-        echo "APPLYING: Applying terraform plan for PRODUCTION..."
-
-        # Re-initialize to ensure we have the plan
         terraform init -backend-config="key=aks/prod.tfstate"
         terraform plan -var-file="prod/prod.tfvars" -out=prod.tfplan
-
-        # Apply the infrastructure
         terraform apply -auto-approve prod.tfplan
         echo "PASSED: PRODUCTION infrastructure deployed"
 
-        # Get AKS credentials
         az aks get-credentials --resource-group gh-devops-prd --name aks-devops-prod --overwrite-existing
         echo "PASSED: AKS credentials configured"
 
-        # Set deployment status to success if we reach here
         echo "deployment_status=success" >> $GITHUB_OUTPUT
 
     - name: Post-deployment verification
       id: verify
       run: |
         echo "=== PRODUCTION VERIFICATION ==="
-        echo "Verifying cluster health..."
         kubectl cluster-info
         kubectl get nodes
         echo "PASSED: Cluster connectivity verified"
 
-        echo "Testing NGINX Ingress Controller..."
         kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=ingress-nginx -n nginx-ingress --timeout=300s
         kubectl get pods -n nginx-ingress
         kubectl get svc -n nginx-ingress
         echo "PASSED: NGINX Ingress Controller verified"
 
-        echo "Testing Argo Rollouts..."
         kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=argo-rollouts -n argo-rollouts --timeout=300s
         kubectl get pods -n argo-rollouts
         echo "PASSED: Argo Rollouts verified"
 
-        echo "Checking LoadBalancer services..."
         kubectl get svc -A --field-selector spec.type=LoadBalancer
 
-        # Set health check to success if all verifications pass
         echo "health_check=success" >> $GITHUB_OUTPUT
         echo "PASSED: Production environment is healthy"
-
-    - name: Auto-merge PR on successful deployment
-      if: steps.deploy.outputs.deployment_status == 'success' && steps.verify.outputs.health_check == 'success'
-      run: |
-        echo "=== AUTO-MERGING PR AFTER SUCCESSFUL DEPLOYMENT ==="
-        echo "PASSED: Deployment successful, merging PR to main"
-        gh pr merge ${{ github.event.pull_request.number }} --squash --admin
-      env:
-        GH_TOKEN: ${{ secrets.TOKEN_GB }}
-
-    - name: Rollback on failure
-      if: failure()
-      working-directory: terraform
-      env:
-        ARM_ACCESS_KEY: ${{ secrets.ARM_ACCESS_KEY }}
-      run: |
-        echo "=== ROLLBACK PROCEDURE ==="
-        echo "FAILED: Deployment or verification failed"
-        echo "ROLLBACK: Initiating rollback..."
-
-        # Destroy the infrastructure
-        terraform init -backend-config="key=aks/prod.tfstate"
-        terraform plan -destroy -var-file="prod/prod.tfvars" -out=rollback.tfplan
-        terraform apply -auto-approve rollback.tfplan
-        echo "PASSED: Rollback completed"
-
-        echo "NOTIFY: Sending failure notifications..."
-        echo "PR will remain open for investigation"
-
-    - name: Deployment summary
-      if: always()
-      run: |
-        echo "=== DEPLOYMENT SUMMARY ==="
-        if [ "${{ steps.deploy.outputs.deployment_status }}" = "success" ] && [ "${{ steps.verify.outputs.health_check }}" = "success" ]; then
-          echo "SUCCESS: PRODUCTION DEPLOYMENT COMPLETED!"
-          echo "PASSED: PR automatically merged"
-        else
-          echo "FAILED: PRODUCTION DEPLOYMENT FAILED!"
-          echo "ROLLBACK: Rollback executed"
-          echo "INFO: PR remains open for investigation"
-        fi
-        echo ""
-        echo "INFO: Deployment Details:"
-        echo "  • Environment: PRODUCTION"
-        echo "  • PR: #${{ github.event.pull_request.number }}"
-        echo "  • Commit: ${{ github.sha }}"
-        echo "  • Timestamp: $(date)"

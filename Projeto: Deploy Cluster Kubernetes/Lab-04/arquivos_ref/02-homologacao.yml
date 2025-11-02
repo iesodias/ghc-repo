@@ -38,7 +38,6 @@ jobs:
         terraform plan -var-file="hml/hml.tfvars" -out=hml.tfplan
         echo "PASSED: Terraform plan generated for HML environment"
 
-
     - name: Deploy to HML
       working-directory: terraform
       env:
@@ -53,7 +52,6 @@ jobs:
         terraform apply -auto-approve hml.tfplan
         echo "PASSED: HML infrastructure deployed"
 
-        # Get AKS credentials
         az aks get-credentials --resource-group gh-devops-hml --name aks-devops-hml --overwrite-existing
         echo "PASSED: AKS credentials configured"
 
@@ -121,3 +119,5 @@ jobs:
           - [ ] Security team approval
           - [ ] Change management notification sent
         pr_draft: false
+        pr_allow_empty: true   # <- força abrir PR mesmo sem diffs
+

@@ -180,11 +180,11 @@ O `TOKEN_GB` e um Personal Access Token (PAT) do GitHub necessario para algumas 
 
 - **Note:** `GitHub Actions AKS Pipeline`
 - **Expiration:** Escolha um periodo adequado (90 dias, 1 ano, ou sem expiracao)
-- **Select scopes:** Marque as seguintes permissoes:
-  - `repo` (Full control of private repositories)
-  - `workflow` (Update GitHub Action workflows)
-  - `write:packages` (Upload packages to GitHub Package Registry)
-  - `read:packages` (Download packages from GitHub Package Registry)
+- **Scopes** (selecione):
+  - REQUIRED: `content` (Full control of private repositories)
+  - REQUIRED: `workflow` (Update GitHub Action workflows)
+  - REQUIRED: `pull request`
+
 
 ### 8.3: Gerar e copiar o token
 

@@ -39,17 +39,13 @@ jobs:
         echo "=== TERRAFORM PLAN SYNTAX VALIDATION ==="
         echo "Validating Terraform configuration syntax..."
 
-        # Initialize Terraform without backend for validation only
         terraform -chdir=terraform init -backend=false
 
-        # Validate syntax for each environment tfvars file
         for env in dev hml prod; do
           echo "Validating configuration syntax for environment: $env"
-          # Only validate the syntax, not create actual plan (no backend access)
           terraform -chdir=terraform validate
           echo "PASSED: Configuration syntax validation completed for $env"
         done
-
 
         echo "PASSED: All environment configurations are syntactically valid"
 

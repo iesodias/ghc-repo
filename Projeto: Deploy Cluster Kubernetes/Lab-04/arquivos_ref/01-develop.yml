@@ -38,7 +38,6 @@ jobs:
         terraform plan -var-file="dev/dev.tfvars" -out=dev.tfplan
         echo "PASSED: Terraform plan generated for DEV environment"
 
-
     - name: Deploy to DEV
       working-directory: terraform
       env:
@@ -53,7 +52,6 @@ jobs:
         terraform apply -auto-approve dev.tfplan
         echo "PASSED: DEV infrastructure deployed"
 
-        # Get AKS credentials
         az aks get-credentials --resource-group gh-devops-dev --name aks-devops-dev --overwrite-existing
         echo "PASSED: AKS credentials configured"
 
@@ -110,3 +108,5 @@ jobs:
           - Merge this PR to trigger HML deployment
           - After HML validation, auto-promotion to PROD will be triggered
         pr_draft: false
+        pr_allow_empty: true   # <- força abrir PR mesmo sem diffs
+
