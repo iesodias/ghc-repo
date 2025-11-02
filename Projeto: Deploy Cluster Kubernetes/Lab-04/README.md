@@ -252,6 +252,7 @@ jobs:
           - Merge this PR to trigger HML deployment
           - After HML validation, auto-promotion to PROD will be triggered
         pr_draft: false
+        pr_allow_empty: true
 EOF
 ```
 
@@ -384,6 +385,7 @@ jobs:
           - [ ] Security team approval
           - [ ] Change management notification sent
         pr_draft: false
+        pr_allow_empty: true
 EOF
 ```
 
@@ -398,10 +400,9 @@ cat > .github/workflows/03-main.yml << 'EOF'
 name: 04 Prd Deploy and Auto-Merge PR
 
 on:
-  pull_request:
+  push:
     branches:
       - main
-    types: [opened, synchronize]
 
 jobs:
   terraform-validation:
@@ -508,26 +509,6 @@ jobs:
 
         echo "health_check=success" >> $GITHUB_OUTPUT
         echo "PASSED: Production environment is healthy"
-
-    - name: Auto-merge PR on successful deployment
-      if: steps.deploy.outputs.deployment_status == 'success' && steps.verify.outputs.health_check == 'success'
-      run: |
-        echo "=== AUTO-MERGING PR AFTER SUCCESSFUL DEPLOYMENT ==="
-        gh pr merge ${{ github.event.pull_request.number }} --squash --admin
-      env:
-        GH_TOKEN: ${{ secrets.TOKEN_GB }}
-
-    - name: Rollback on failure
-      if: failure()
-      working-directory: terraform
-      env:
-        ARM_ACCESS_KEY: ${{ secrets.ARM_ACCESS_KEY }}
-      run: |
-        echo "=== ROLLBACK PROCEDURE ==="
-        terraform init -backend-config="key=aks/prod.tfstate"
-        terraform plan -destroy -var-file="prod/prod.tfvars" -out=rollback.tfplan
-        terraform apply -auto-approve rollback.tfplan
-        echo "PASSED: Rollback completed"
 EOF
 ```
 
@@ -599,10 +580,18 @@ jobs:
         ARM_ACCESS_KEY: ${{ secrets.ARM_ACCESS_KEY }}
       run: |
         echo "=== TERRAFORM DESTROY PREPARATION ==="
+        echo "Environment: ${{ inputs.environment }}"
+
+        # Initialize with the correct backend key for the environment
         terraform init -backend-config="key=aks/${{ inputs.environment }}.tfstate"
+
+        # Refresh state to ensure consistency
         terraform refresh -var-file="${{ inputs.environment }}/${{ inputs.environment }}.tfvars"
+
+        # Create destroy plan for verification
         terraform plan -destroy -var-file="${{ inputs.environment }}/${{ inputs.environment }}.tfvars" -out=destroy.tfplan
-        echo "PASSED: Destroy plan created"
+
+        echo "PASSED: Destroy plan created for ${{ inputs.environment }} environment"
 
     - name: Terraform Destroy
       working-directory: terraform
@@ -614,19 +603,54 @@ jobs:
         ARM_ACCESS_KEY: ${{ secrets.ARM_ACCESS_KEY }}
       run: |
         echo "=== DESTROYING ${{ inputs.environment }} ENVIRONMENT ==="
+        echo "WARNING: This will destroy all resources in ${{ inputs.environment }} environment"
+        echo "Starting destruction in 5 seconds..."
         sleep 5
+
+        # Apply the destroy plan
         terraform apply -auto-approve destroy.tfplan
-        echo "SUCCESS: ${{ inputs.environment }} environment destroyed"
+
+        echo "SUCCESS: ${{ inputs.environment }} environment destroyed successfully"
 
     - name: Verify Destruction
       run: |
         echo "=== DESTRUCTION VERIFICATION ==="
+        echo "Verifying resources are destroyed..."
+
+        # Check if AKS cluster still exists
         cluster_exists=$(az aks show --resource-group gh-devops-${{ inputs.environment }} --name aks-devops-${{ inputs.environment }} --query "name" -o tsv 2>/dev/null || echo "")
 
         if [ -z "$cluster_exists" ]; then
-          echo "SUCCESS: AKS cluster destroyed"
+          echo "SUCCESS: AKS cluster aks-devops-${{ inputs.environment }} has been destroyed"
         else
-          echo "WARNING: AKS cluster still exists"
+          echo "WARNING: AKS cluster still exists: $cluster_exists"
+        fi
+
+        echo "COMPLETED: Destruction verification finished"
+
+    - name: Cleanup Summary
+      if: always()
+      run: |
+        echo "=== DESTRUCTION SUMMARY ==="
+        echo "Environment: ${{ inputs.environment }}"
+        echo "Timestamp: $(date)"
+        echo "Status: ${{ job.status }}"
+        echo ""
+        echo "Resources destroyed:"
+        echo "- AKS Cluster: aks-devops-${{ inputs.environment }}"
+        echo "- NGINX Ingress Controller"
+        echo "- Argo Rollouts"
+        echo "- Associated Load Balancers"
+        echo "- Network Security Groups"
+        echo ""
+        echo "Resources preserved:"
+        echo "- Resource Group: gh-devops-${{ inputs.environment }}"
+        echo "- Terraform State: aks/${{ inputs.environment }}.tfstate"
+        echo ""
+        if [ "${{ job.status }}" = "success" ]; then
+          echo "SUCCESS: Environment ${{ inputs.environment }} destroyed successfully"
+        else
+          echo "FAILED: Environment destruction encountered errors"
         fi
 EOF
 ```

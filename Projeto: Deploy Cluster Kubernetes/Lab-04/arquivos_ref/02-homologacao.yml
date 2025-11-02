@@ -119,5 +119,4 @@ jobs:
           - [ ] Security team approval
           - [ ] Change management notification sent
         pr_draft: false
-        pr_allow_empty: true   # <- força abrir PR mesmo sem diffs
-
+        pr_allow_empty: true
