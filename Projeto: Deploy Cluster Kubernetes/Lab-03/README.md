@@ -237,6 +237,13 @@ cd ~
 git clone https://github.com/iesodias/teste-k8s.git
 ```
 
+criar branches
+
+develop
+
+homologacao
+
+
 ---
 
 ## Conclusao
